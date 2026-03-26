@@ -1,0 +1,42 @@
+{
+  "SAA": [
+    {
+      "id": 1,
+      "question": "某公司需要在AWS上部署一個需要處理突發流量的網站，但預算有限。以下哪種EC2購買選項最適合？",
+      "options": {
+        "A": "On-Demand Instances",
+        "B": "Reserved Instances",
+        "C": "Spot Instances",
+        "D": "Savings Plans"
+      },
+      "correct_answer": "C",
+      "explanation": "Spot Instances 可以以更低的價格（通常是 On-Demand 價格的 20-90% 折扣）使用未使用的 EC2 容量，非常適合處理突發流量且預算有限的場景。雖然可能被中斷，但可以通過適當的架構設計來處理。"
+    },
+    {
+      "id": 2,
+      "question": "企業應用程序需要共享文件系統，可以同時被多個EC2實例訪問和修改。以下哪個AWS服務最適合？",
+      "options": {
+        "A": "Amazon S3",
+        "B": "Amazon EBS",
+        "C": "Amazon EFS",
+        "D": "AWS Storage Gateway"
+      },
+      "correct_answer": "C",
+      "explanation": "Amazon EFS (Elastic File System) 提供完全託管的共享文件系統，支援多個 EC2 實例同時讀寫，自動擴展且支援跨可用區訪問。EBS 只能附加到單個實例，S3 是物件存儲不適合文件系統操作。"
+    }
+  ],
+  "SAP": [
+    {
+      "id": 1,
+      "question": "企業需要設計一個跨多個AWS區域的災難恢復方案，RTO要求小於1小時，RPO小於15分鐘。最適合的策略是？",
+      "options": {
+        "A": "Backup and Restore",
+        "B": "Pilot Light",
+        "C": "Warm Standby",
+        "D": "Multi-Site Active-Active"
+      },
+      "correct_answer": "C",
+      "explanation": "Warm Standby 策略在備援區域維持縮小版本的完整環境，可以快速擴展以承接生產流量。這個策略可以滿足 RTO < 1小時的要求。Pilot Light 的 RTO 通常需要數小時，而 Multi-Site 雖然更快但成本高昂。"
+    }
+  ]
+}
