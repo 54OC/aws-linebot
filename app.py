@@ -69,8 +69,8 @@ def welcome_flex():
             "type": "bubble",
             "header": { "type": "box", "layout": "vertical", "contents": [{ "type": "text", "text": "AWS 證照練習助手", "weight": "bold", "color": "#E67E22", "size": "xl" }] },
             "body": { "type": "box", "layout": "vertical", "contents": [
-                { "type": "text", "text": "請選擇妳要練習的證照：", "weight": "bold" },
-                { "type": "text", "text": "💡 首次點擊若無反應請稍等 15 秒喚醒伺服器。", "size": "xs", "color": "#aaaaaa", "margin": "md", "wrap": True }
+                { "type": "text", "text": "妳好！準備好要挑戰了嗎？", "weight": "bold" },
+                { "type": "text", "text": "💡 貼心提醒：由於本機器人部署於免費雲端空間，若一段時間未運行，首次點擊可能會有 15-30 秒的「熱機延遲」。若按鈕沒反應，請稍等片刻或再點擊一次，感謝您的耐心！", "size": "xs", "color": "#aaaaaa", "margin": "md", "wrap": True }
             ]},
             "footer": { "type": "box", "layout": "vertical", "spacing": "sm", "contents": [
                 { "type": "button", "style": "primary", "color": "#E67E22", "action": { "type": "postback", "label": "SAA (助理架構師)", "data": "menu=lang&type=saa" } },
