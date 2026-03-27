@@ -7,15 +7,16 @@ import hashlib
 import hmac
 import base64
 import re
+from urllib.parse import parse_qs
 
 app = Flask(__name__)
 
-# LINE 設定 (由環境變數讀取)
+# LINE 設定
 CHANNEL_ACCESS_TOKEN = os.environ.get('CHANNEL_ACCESS_TOKEN')
 CHANNEL_SECRET = os.environ.get('CHANNEL_SECRET')
 LINE_REPLY_URL = 'https://api.line.me/v2/bot/message/reply'
 
-# 1. 讀取題庫 (加強解析邏輯)
+# 1. 強化版題庫讀取 (支援雙語)
 def load_questions():
     questions = []
     if not os.path.exists('aws_questions.csv'): return []
@@ -23,110 +24,142 @@ def load_questions():
         with open('aws_questions.csv', 'r', encoding='utf-8-sig') as f:
             reader = csv.DictReader(f)
             for row in reader:
-                q_text = row.get('題目(中)', '').strip()
-                opt_raw = row.get('選項(中)', '').strip()
-                ans = row.get('正確答案', 'A').strip().upper()
-                explain = row.get('解析(中)', '').strip() or "加油！這題妳一定會。"
+                # 準備資料結構
+                q_data = {
+                    'q_cn': row.get('題目(中)', '').strip(),
+                    'q_en': row.get('題目(英)', '').strip(),
+                    'opt_cn_raw': row.get('選項(中)', '').strip(),
+                    'opt_en_raw': row.get('選項(英)', '').strip(),
+                    'ans': row.get('正確答案', 'A').strip().upper(),
+                    'exp': row.get('解析(中)', '').strip() or "加油！祝妳考試順利。"
+                }
                 
-                # 自動拆解選項 A. B. C. D.
-                opts = {}
-                for char in ['A', 'B', 'C', 'D']:
-                    pattern = rf"{char}[.)](.*?)(?=[B-D][.)]|$)"
-                    match = re.search(pattern, opt_raw, re.DOTALL)
-                    opts[char] = match.group(1).strip() if match else f"選項 {char}"
+                # 自動拆解雙語選項 A. B. C. D.
+                q_data['opts_cn'] = parse_options(q_data['opt_cn_raw'])
+                q_data['opts_en'] = parse_options(q_data['opt_en_raw'])
 
-                if q_text:
-                    questions.append({'q': q_text, 'opts': opts, 'ans': ans, 'exp': explain})
+                if q_data['q_cn'] or q_data['q_en']:
+                    questions.append(q_data)
         return questions
-    except: return []
+    except Exception as e:
+        print(f"讀取錯誤: {e}")
+        return []
+
+def parse_options(opt_raw):
+    opts = {}
+    for char in ['A', 'B', 'C', 'D']:
+        pattern = rf"{char}[.)](.*?)(?=[B-D][.)]|$)"
+        match = re.search(pattern, opt_raw, re.DOTALL)
+        opts[char] = match.group(1).strip() if match else f"Option {char}"
+    return opts
 
 QUESTIONS = load_questions()
 
-# 2. 發送訊息工具
-def send_line_message(reply_token, messages):
+# 2. LINE 工具
+def send_line(reply_token, messages):
     headers = {'Content-Type': 'application/json', 'Authorization': f'Bearer {CHANNEL_ACCESS_TOKEN}'}
     payload = {'replyToken': reply_token, 'messages': messages}
     requests.post(LINE_REPLY_URL, headers=headers, json=payload)
 
-# 3. 歡迎訊息 Flex (加入貼心提示)
-def get_welcome_flex():
+# 3. 各種 Flex Message 模板
+def welcome_flex():
     return {
-        "type": "flex",
-        "altText": "歡迎使用 AWS 題庫助手",
+        "type": "flex", "altText": "AWS 助手",
         "contents": {
             "type": "bubble",
-            "header": { "type": "box", "layout": "vertical", "contents": [{ "type": "text", "text": "AWS 證照練習助手", "weight": "bold", "color": "#E67E22", "size": "lg" }] },
-            "body": {
-                "type": "box", "layout": "vertical", "contents": [
-                    { "type": "text", "text": "妳好！準備好要挑戰了嗎？", "weight": "bold", "size": "md" },
-                    { "type": "text", "text": "💡 貼心提醒：由於本機器人部署於免費雲端空間，若一段時間未運行，首次點擊可能會有 15-30 秒的「熱機延遲」。若按鈕沒反應，請稍等片刻或再點擊一次，感謝您的耐心！", "wrap": True, "size": "xs", "color": "#888888", "margin": "md" }
-                ]
-            },
-            "footer": {
-                "type": "box", "layout": "vertical", "spacing": "sm", "contents": [
-                    { "type": "button", "style": "primary", "color": "#E67E22", "action": { "type": "postback", "label": "開始練習 SAA", "data": "action=start_saa" } },
-                    { "type": "button", "style": "secondary", "action": { "type": "postback", "label": "開始練習 SAP", "data": "action=start_sap" } }
-                ]
-            }
+            "header": { "type": "box", "layout": "vertical", "contents": [{ "type": "text", "text": "AWS 證照練習助手", "weight": "bold", "color": "#E67E22", "size": "xl" }] },
+            "body": { "type": "box", "layout": "vertical", "contents": [
+                { "type": "text", "text": "請選擇妳要練習的證照：", "weight": "bold" },
+                { "type": "text", "text": "💡 首次點擊若無反應請稍等 15 秒喚醒伺服器。", "size": "xs", "color": "#aaaaaa", "margin": "md", "wrap": True }
+            ]},
+            "footer": { "type": "box", "layout": "vertical", "spacing": "sm", "contents": [
+                { "type": "button", "style": "primary", "color": "#E67E22", "action": { "type": "postback", "label": "SAA (助理架構師)", "data": "menu=lang&type=saa" } },
+                { "type": "button", "style": "secondary", "action": { "type": "postback", "label": "SAP (專業架構師)", "data": "menu=lang&type=sap" } }
+            ]}
         }
     }
 
-# 4. 出題卡片 Flex (真．按鈕設計)
-def get_question_flex(idx):
-    q = QUESTIONS[idx]
+def lang_select_flex(exam_type):
     return {
-        "type": "flex",
-        "altText": "新題目來了",
+        "type": "flex", "altText": "請選擇語言",
         "contents": {
             "type": "bubble",
-            "body": {
-                "type": "box", "layout": "vertical", "contents": [
-                    { "type": "text", "text": f"題庫練習 (第 {idx+1} 題)", "size": "xs", "color": "#BCBCBC" },
-                    { "type": "text", "text": q['q'], "wrap": True, "weight": "bold", "margin": "md" },
-                    { "type": "separator", "margin": "xl" },
-                    { "type": "box", "layout": "vertical", "margin": "lg", "spacing": "sm", "contents": [
-                        { "type": "button", "action": { "type": "postback", "label": f"A. {q['opts']['A'][:18]}", "data": f"action=ans&user=A&correct={q['ans']}&idx={idx}" }, "height": "sm" },
-                        { "type": "button", "action": { "type": "postback", "label": f"B. {q['opts']['B'][:18]}", "data": f"action=ans&user=B&correct={q['ans']}&idx={idx}" }, "height": "sm" },
-                        { "type": "button", "action": { "type": "postback", "label": f"C. {q['opts']['C'][:18]}", "data": f"action=ans&user=C&correct={q['ans']}&idx={idx}" }, "height": "sm" },
-                        { "type": "button", "action": { "type": "postback", "label": f"D. {q['opts']['D'][:18]}", "data": f"action=ans&user=D&correct={q['ans']}&idx={idx}" }, "height": "sm" }
-                    ]}
-                ]
-            }
+            "body": { "type": "box", "layout": "vertical", "contents": [{ "type": "text", "text": f"妳選擇了 {exam_type.upper()}，請選擇出題語言：", "weight": "bold" }] },
+            "footer": { "type": "box", "layout": "vertical", "spacing": "sm", "contents": [
+                { "type": "button", "style": "primary", "action": { "type": "postback", "label": "中文答題 (Traditional Chinese)", "data": f"action=start&lang=cn&type={exam_type}" } },
+                { "type": "button", "style": "primary", "action": { "type": "postback", "label": "英文答題 (English)", "data": f"action=start&lang=en&type={exam_type}" } }
+            ]}
+        }
+    }
+
+def question_flex(idx, lang):
+    q = QUESTIONS[idx]
+    title = q['q_cn'] if lang == 'cn' else q['q_en']
+    opts = q['opts_cn'] if lang == 'cn' else q['opts_en']
+    return {
+        "type": "flex", "altText": "題目來了",
+        "contents": {
+            "type": "bubble",
+            "body": { "type": "box", "layout": "vertical", "contents": [
+                { "type": "text", "text": f"AWS 隨機練習 (語言: {lang.upper()})", "size": "xs", "color": "#aaaaaa" },
+                { "type": "text", "text": title, "wrap": True, "weight": "bold", "margin": "md" },
+                { "type": "separator", "margin": "xl" },
+                { "type": "box", "layout": "vertical", "margin": "lg", "spacing": "sm", "contents": [
+                    { "type": "button", "action": { "type": "postback", "label": f"A. {opts['A'][:30]}", "data": f"action=ans&user=A&correct={q['ans']}&idx={idx}&lang={lang}" } },
+                    { "type": "button", "action": { "type": "postback", "label": f"B. {opts['B'][:30]}", "data": f"action=ans&user=B&correct={q['ans']}&idx={idx}&lang={lang}" } },
+                    { "type": "button", "action": { "type": "postback", "label": f"C. {opts['C'][:30]}", "data": f"action=ans&user=C&correct={q['ans']}&idx={idx}&lang={lang}" } },
+                    { "type": "button", "action": { "type": "postback", "label": f"D. {opts['D'][:30]}", "data": f"action=ans&user=D&correct={q['ans']}&idx={idx}&lang={lang}" } }
+                ]}
+            ]}
         }
     }
 
 @app.route("/callback", methods=['POST'])
 def callback():
+    body = request.get_data(as_text=True)
     events = request.json.get('events', [])
     for event in events:
-        if event['type'] == 'follow':
-            send_line_message(event['replyToken'], [get_welcome_flex()])
+        if event['type'] == 'follow' or (event['type'] == 'message' and event['message']['type'] == 'text'):
+            send_line(event['replyToken'], [welcome_flex()])
+            
         elif event['type'] == 'postback':
-            data = event['postback']['data']
-            if "action=start" in data:
+            # 這裡修正了解析邏輯，改用標準的 URL 參數解析
+            data = parse_qs(event['postback']['data'])
+            action = data.get('action', [None])[0]
+            menu = data.get('menu', [None])[0]
+            lang = data.get('lang', ['cn'])[0]
+            
+            if menu == 'lang':
+                exam_type = data.get('type', ['saa'])[0]
+                send_line(event['replyToken'], [lang_select_flex(exam_type)])
+            
+            elif action == 'start':
                 idx = random.randint(0, len(QUESTIONS)-1)
-                send_line_message(event['replyToken'], [get_question_flex(idx)])
-            elif "action=ans" in data:
-                params = dict(item.split('=') for item in data.split('&'))
-                user_ans, correct_ans, q_idx = params['user'], params['correct'], int(params['idx'])
-                res = "🎉 答對了！" if user_ans == correct_ans else f"❌ 答錯了，正解是 {correct_ans}"
+                send_line(event['replyToken'], [question_flex(idx, lang)])
+            
+            elif action == 'ans':
+                user_ans = data.get('user', [''])[0]
+                correct_ans = data.get('correct', [''])[0]
+                q_idx = int(data.get('idx', [0])[0])
                 
-                # 回傳結果與「下一題」按鈕
+                is_correct = (user_ans == correct_ans)
+                res_text = "🎉 答對了！" if is_correct else f"❌ 答錯了，正解是 {correct_ans}"
+                
                 result_msg = [
-                    { "type": "text", "text": f"{res}\n\n💡 解析：\n{QUESTIONS[q_idx]['exp']}" },
+                    { "type": "text", "text": f"{res_text}\n\n💡 解析：\n{QUESTIONS[q_idx]['exp']}" },
                     { "type": "flex", "altText": "下一步", "contents": {
-                        "type": "bubble", "size": "small", "body": { "type": "box", "layout": "vertical", "contents": [
-                            { "type": "button", "style": "primary", "action": { "type": "postback", "label": "下一題", "data": "action=start_saa" } }
-                        ]}
-                    }}
+                        "type": "bubble", "body": { "type": "box", "layout": "vertical", "spacing": "md", "contents": [
+                            { "type": "button", "style": "primary", "action": { "type": "postback", "label": "挑戰下一題", "data": f"action=start&lang={lang}" } },
+                            { "type": "button", "style": "secondary", "action": { "type": "postback", "label": "回主選單/更換語言", "data": "menu=main" } }
+                        ]}}
+                    }
                 ]
-                send_line_message(event['replyToken'], result_msg)
-        elif event['type'] == 'message':
-            send_line_message(event['replyToken'], [get_welcome_flex()])
-    return 'OK'
+                send_line(event['replyToken'], result_msg)
+            
+            elif data.get('menu', [None])[0] == 'main':
+                send_line(event['replyToken'], [welcome_flex()])
 
-@app.route("/")
-def home(): return "AWS Bot is running"
+    return 'OK'
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000)
