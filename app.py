@@ -1,19 +1,18 @@
-from flask import Flask, request, abort
-from linebot import LineBotApi, WebhookHandler
-from linebot.exceptions import InvalidSignatureError
-from linebot.models import MessageEvent, TextMessage, TextSendMessage
+from flask import Flask, request, jsonify
+import requests
 import os
 import csv
 import random
+import hashlib
+import hmac
+import base64
 
 app = Flask(__name__)
 
-# 設定 TOKEN 和 SECRET（本地測試時填入，部署時用環境變數）
-TOKEN = os.environ.get('CHANNEL_ACCESS_TOKEN', 'YOUR_TOKEN_HERE')  # 👈 本地測試時改這裡
-SECRET = os.environ.get('CHANNEL_SECRET', 'YOUR_SECRET_HERE')      # 👈 本地測試時改這裡
-
-line_bot_api = LineBotApi(TOKEN)
-handler = WebhookHandler(SECRET)
+# LINE 設定
+CHANNEL_ACCESS_TOKEN = os.environ.get('CHANNEL_ACCESS_TOKEN', 'YOUR_TOKEN_HERE')
+CHANNEL_SECRET = os.environ.get('CHANNEL_SECRET', 'YOUR_SECRET_HERE')
+LINE_API = 'https://api.line.me/v2/bot/message/reply'
 
 # 從 CSV 載入題庫
 def load_questions_from_csv():
@@ -21,7 +20,6 @@ def load_questions_from_csv():
     questions = []
     
     try:
-        # 檢查檔案是否存在
         if not os.path.exists('aws_questions.csv'):
             print("⚠️ CSV 檔案不存在，使用預設題庫")
             return get_default_questions()
@@ -30,7 +28,6 @@ def load_questions_from_csv():
             reader = csv.DictReader(f)
             
             for row in reader:
-                # 從您的 CSV 提取資料
                 question_text = row.get('中文翻譯', '').strip()
                 
                 if not question_text or len(question_text) < 10:
@@ -43,19 +40,17 @@ def load_questions_from_csv():
                 
                 for line in lines:
                     line = line.strip()
-                    # 檢查選項（支援多種格式）
-                    if line.startswith('A.') or line.startswith('A)') or line.startswith('A '):
+                    if line.startswith('A.') or line.startswith('A)'):
                         options['A'] = line[2:].strip()
-                    elif line.startswith('B.') or line.startswith('B)') or line.startswith('B '):
+                    elif line.startswith('B.') or line.startswith('B)'):
                         options['B'] = line[2:].strip()
-                    elif line.startswith('C.') or line.startswith('C)') or line.startswith('C '):
+                    elif line.startswith('C.') or line.startswith('C)'):
                         options['C'] = line[2:].strip()
-                    elif line.startswith('D.') or line.startswith('D)') or line.startswith('D '):
+                    elif line.startswith('D.') or line.startswith('D)'):
                         options['D'] = line[2:].strip()
                     elif line and not any(line.startswith(x) for x in ['A.', 'B.', 'C.', 'D.', 'A)', 'B)', 'C)', 'D)']):
                         question_main.append(line)
                 
-                # 如果成功解析出選項
                 if len(options) >= 4:
                     questions.append({
                         'q': '\n'.join(question_main) if question_main else question_text[:200],
@@ -66,9 +61,7 @@ def load_questions_from_csv():
         
         print(f"✅ 成功從 CSV 載入 {len(questions)} 題")
         
-        # 如果 CSV 解析失敗，使用預設題庫
         if len(questions) == 0:
-            print("⚠️ CSV 解析失敗，使用預設題庫")
             return get_default_questions()
         
         return questions
@@ -78,7 +71,7 @@ def load_questions_from_csv():
         return get_default_questions()
 
 def get_default_questions():
-    """預設題庫（當 CSV 無法載入時使用）"""
+    """預設題庫"""
     return [
         {
             'q': '某公司需要在AWS上部署一個需要處理突發流量的網站，但預算有限。以下哪種EC2購買選項最適合？',
@@ -122,29 +115,69 @@ print(f"📚 題庫已載入，共 {len(QUESTIONS)} 題")
 # 儲存用戶狀態
 users = {}
 
+def verify_signature(body, signature):
+    """驗證 LINE 簽名"""
+    hash_value = hmac.new(
+        CHANNEL_SECRET.encode('utf-8'),
+        body.encode('utf-8'),
+        hashlib.sha256
+    ).digest()
+    expected_signature = base64.b64encode(hash_value).decode('utf-8')
+    return signature == expected_signature
+
+def send_reply(reply_token, text):
+    """發送回覆訊息"""
+    headers = {
+        'Content-Type': 'application/json',
+        'Authorization': f'Bearer {CHANNEL_ACCESS_TOKEN}'
+    }
+    
+    data = {
+        'replyToken': reply_token,
+        'messages': [
+            {
+                'type': 'text',
+                'text': text
+            }
+        ]
+    }
+    
+    response = requests.post(LINE_API, headers=headers, json=data)
+    return response.status_code == 200
+
 @app.route("/")
 def home():
     return f"✅ AWS LINE Bot is running! 題庫共 {len(QUESTIONS)} 題"
 
 @app.route("/callback", methods=['POST'])
 def callback():
+    # 驗證簽名
     signature = request.headers.get('X-Line-Signature', '')
     body = request.get_data(as_text=True)
     
-    try:
-        handler.handle(body, signature)
-    except InvalidSignatureError:
+    if not verify_signature(body, signature):
         print("❌ Invalid signature")
-        abort(400)
+        return 'Invalid signature', 400
+    
+    # 解析事件
+    try:
+        events = request.json.get('events', [])
+        
+        for event in events:
+            if event['type'] == 'message' and event['message']['type'] == 'text':
+                handle_message(event)
+        
+        return 'OK', 200
+        
     except Exception as e:
         print(f"❌ Error: {e}")
-    
-    return 'OK'
+        return 'Error', 500
 
-@handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-    user_id = event.source.user_id
-    text = event.message.text.strip()
+    """處理訊息"""
+    user_id = event['source']['userId']
+    text = event['message']['text'].strip()
+    reply_token = event['replyToken']
     
     # 初始化用戶
     if user_id not in users:
@@ -163,13 +196,13 @@ def handle_message(event):
         options_text = '\n'.join([f"{k}. {v}" for k, v in q['options'].items()])
         msg = f"🎓 AWS SAA 測驗開始！\n\n【第 1 題】\n\n{q['q']}\n\n{options_text}\n\n請輸入答案 (A/B/C/D)"
         
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=msg))
+        send_reply(reply_token, msg)
         return
     
     # 回答問題
     if text.upper() in ['A', 'B', 'C', 'D']:
         if 'current_q' not in users[user_id]:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text='請先輸入「開始」開始測驗'))
+            send_reply(reply_token, '請先輸入「開始」開始測驗')
             return
         
         q = users[user_id]['current_q']
@@ -185,10 +218,10 @@ def handle_message(event):
         
         result += f"\n\n📊 目前成績：{users[user_id]['score']}/{users[user_id]['total']}"
         
-        # 選下一題（避免重複）
+        # 選下一題
         available = [i for i in range(len(QUESTIONS)) if i not in users[user_id]['asked']]
         
-        if len(available) > 0 and users[user_id]['total'] < 10:  # 最多 10 題
+        if len(available) > 0 and users[user_id]['total'] < 10:
             next_q = QUESTIONS[random.choice(available)]
             users[user_id]['current_q'] = next_q
             users[user_id]['asked'].append(QUESTIONS.index(next_q))
@@ -196,7 +229,6 @@ def handle_message(event):
             options_text = '\n'.join([f"{k}. {v}" for k, v in next_q['options'].items()])
             msg = f"{result}\n\n{'='*30}\n\n【第 {users[user_id]['total']+1} 題】\n\n{next_q['q']}\n\n{options_text}\n\n請輸入答案"
         else:
-            # 測驗結束
             score = users[user_id]['score']
             total = users[user_id]['total']
             pct = int(score * 100 / total) if total > 0 else 0
@@ -213,9 +245,9 @@ def handle_message(event):
             
             msg = f"{result}\n\n{'='*30}\n\n{emoji} 測驗完成！\n\n最終得分：{score}/{total} ({pct}%)\n{comment}\n\n輸入「開始」重新測驗"
         
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=msg))
+        send_reply(reply_token, msg)
     else:
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text='💡 請輸入「開始」開始測驗，或輸入 A/B/C/D 回答問題'))
+        send_reply(reply_token, '💡 請輸入「開始」開始測驗，或輸入 A/B/C/D 回答問題')
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
