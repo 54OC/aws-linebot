@@ -13,109 +13,124 @@ CHANNEL_ACCESS_TOKEN = os.environ.get('CHANNEL_ACCESS_TOKEN')
 CHANNEL_SECRET = os.environ.get('CHANNEL_SECRET')
 LINE_REPLY_URL = 'https://api.line.me/v2/bot/message/reply'
 
-# 🎨 莫蘭迪色系配置 (Morandi Palette)
-COLOR_PRIMARY = "#95A3A4"   # 莫蘭迪綠 (主按鈕)
-COLOR_SECONDARY = "#B8A99A" # 莫蘭迪砂 (次按鈕)
-COLOR_TEXT_MAIN = "#555555" # 深灰 (內文)
-COLOR_TEXT_SOFT = "#7E8989" # 煙燻灰 (標題)
+# 🎨 莫蘭迪色系 (Morandi Palette)
+COLOR_PRIMARY = "#95A3A4"   # 莫蘭迪灰綠 (主按鈕)
+COLOR_SECONDARY = "#B8A99A" # 莫蘭迪砂褐 (次按鈕)
+COLOR_TITLE = "#7E8989"     # 煙燻灰 (標題)
+COLOR_TEXT = "#555555"      # 深灰 (內容)
 
-# 全域題庫
+# 全域題庫暫存
 QUESTIONS = {'SAA': [], 'SAP': []}
 
-def load_questions_from_excel():
+def load_all_questions():
     filename = 'AWS_SAA_SAP_繁體中文版.xlsx'
-    if not os.path.exists(filename):
-        print("⚠️ 找不到 Excel 檔案")
-        return "找不到檔案"
-
+    if not os.path.exists(filename): return "找不到 Excel 檔案"
+    
     try:
         wb = openpyxl.load_workbook(filename, data_only=True)
-        for category in ['SAA', 'SAP']:
-            if category in wb.sheetnames:
-                sheet = wb[category]
+        for cat in ['SAA', 'SAP']:
+            if cat in wb.sheetnames:
+                sheet = wb[cat]
                 headers = [str(cell.value).strip() if cell.value else "" for cell in sheet[1]]
-                col_map = {name: i for i, name in enumerate(headers) if name}
-                
-                # 檢查必要欄位是否存在 (相容多種命名方式)
-                q_col = col_map.get('題目(中)')
-                opt_col = col_map.get('選項(中)')
-                ans_col = col_map.get('正確答案')
-                exp_col = col_map.get('解析(中)') or col_map.get('專業解析')
+                col = {name: i for i, name in enumerate(headers) if name}
                 
                 for row in sheet.iter_rows(min_row=2, values_only=True):
-                    if row[q_col] and row[opt_col]: # 確保題目跟選項都有內容才加入
+                    # 只要英/中任一邊有題目就抓進來
+                    if row[col.get('題目(英)', 0)] or row[col.get('題目(中)', 0)]:
                         q_data = {
-                            'q': str(row[q_col]).strip(),
-                            'opts_raw': str(row[opt_col]).strip(),
-                            'ans': str(row[ans_col] or "A").strip().upper(),
-                            'exp': str(row[exp_col] or "暫無詳細解析。").strip()
+                            'q_cn': str(row[col.get('題目(中)', 0)] or "").strip(),
+                            'q_en': str(row[col.get('題目(英)', 0)] or "").strip(),
+                            'opt_cn_raw': str(row[col.get('選項(中)', 0)] or "").strip(),
+                            'opt_en_raw': str(row[col.get('選項(英)', 0)] or "").strip(),
+                            'ans': str(row[col.get('正確答案', 0)] or "A").strip().upper(),
+                            'exp_cn': str(row[col.get('解析(中)', 0)] or "暫無中文解析。").strip(),
+                            'exp_en': str(row[col.get('答案備註', 0)] or "No English explanation available.").strip()
                         }
-                        q_data['opts'] = parse_options(q_data['opts_raw'])
-                        QUESTIONS[category].append(q_data)
+                        # 解析選項 A. B. C. D.
+                        q_data['opts_cn'] = parse_options(q_data['opt_cn_raw'])
+                        q_data['opts_en'] = parse_options(q_data['opt_en_raw'])
+                        QUESTIONS[cat].append(q_data)
         return "成功"
     except Exception as e:
         return str(e)
 
-def parse_options(raw_text):
+def parse_options(raw):
     opts = {}
+    if not raw: return {}
     for char in ['A', 'B', 'C', 'D']:
-        # 同時支援 A. B. 或 A) B) 格式
         pattern = rf"{char}[.)](.*?)(?=[A-D][.)]|$)"
-        match = re.search(pattern, raw_text, re.DOTALL)
+        match = re.search(pattern, raw, re.DOTALL)
         opts[char] = match.group(1).strip() if match else ""
     return opts
 
-# 啟動時載入
-load_status = load_questions_from_excel()
+load_status = load_all_questions()
 
 def send_line(reply_token, messages):
     headers = {'Content-Type': 'application/json', 'Authorization': f'Bearer {CHANNEL_ACCESS_TOKEN}'}
     payload = {'replyToken': reply_token, 'messages': messages}
     requests.post(LINE_REPLY_URL, headers=headers, json=payload)
 
-# --- UI 介面 ---
+# --- Flex UI 設計 ---
 
 def welcome_flex():
     return {
-        "type": "flex", "altText": "AWS 學習助手",
+        "type": "flex", "altText": "AWS 助手",
         "contents": {
             "type": "bubble",
-            "header": { "type": "box", "layout": "vertical", "contents": [{ "type": "text", "text": "AWS CERTIFIED GUIDE", "weight": "bold", "color": COLOR_TEXT_SOFT, "size": "sm", "letterSpacing": "0.1k" }] },
+            "header": { "type": "box", "layout": "vertical", "contents": [{ "type": "text", "text": "AWS CERTIFIED GUIDE", "weight": "bold", "color": COLOR_TITLE, "size": "sm" }] },
             "body": { "type": "box", "layout": "vertical", "contents": [
-                { "type": "text", "text": "妳好！今天要練習哪一科？", "weight": "bold", "size": "lg", "color": COLOR_TEXT_MAIN },
-                { "type": "text", "text": "💡 點擊下方按鈕開始隨機出題，祝妳順利考取證照！", "wrap": True, "size": "xs", "color": "#999999", "margin": "md" }
+                { "type": "text", "text": "妳好！準備好要挑戰了嗎？", "weight": "bold", "size": "lg", "color": COLOR_TEXT },
+                { "type": "text", "text": "請選擇妳要練習的考試等級：", "size": "xs", "color": "#999999", "margin": "md" }
             ]},
             "footer": { "type": "box", "layout": "vertical", "spacing": "sm", "contents": [
-                { "type": "button", "style": "primary", "color": COLOR_PRIMARY, "action": { "type": "postback", "label": "SAA (助理架構師)", "data": "type=SAA" } },
-                { "type": "button", "style": "primary", "color": COLOR_SECONDARY, "action": { "type": "postback", "label": "SAP (專業架構師)", "data": "type=SAP" } }
+                { "type": "button", "style": "primary", "color": COLOR_PRIMARY, "action": { "type": "postback", "label": "SAA (助理架構師)", "data": "menu=lang&type=SAA" } },
+                { "type": "button", "style": "primary", "color": COLOR_SECONDARY, "action": { "type": "postback", "label": "SAP (專業架構師)", "data": "menu=lang&type=SAP" } }
             ]}
         }
     }
 
-def question_flex(category, idx):
-    q = QUESTIONS[category][idx]
-    option_texts = []
-    for char in ['A', 'B', 'C', 'D']:
-        if q['opts'].get(char):
-            option_texts.append({ "type": "text", "text": f"{char}. {q['opts'][char]}", "wrap": True, "size": "sm", "margin": "md", "color": "#666666" })
-
+def lang_select_flex(exam_type):
     return {
-        "type": "flex", "altText": "新題目",
+        "type": "flex", "altText": "選擇語言",
         "contents": {
             "type": "bubble",
             "body": { "type": "box", "layout": "vertical", "contents": [
-                { "type": "text", "text": f"AWS {category} PRACTICE", "size": "xs", "color": COLOR_PRIMARY, "weight": "bold" },
-                { "type": "text", "text": q['q'], "wrap": True, "weight": "bold", "margin": "md", "size": "md", "color": COLOR_TEXT_MAIN },
-                { "type": "separator", "margin": "xl" },
-                { "type": "box", "layout": "vertical", "margin": "lg", "contents": option_texts }
+                { "type": "text", "text": f"妳選擇了 {exam_type}", "weight": "bold", "color": COLOR_TEXT },
+                { "type": "text", "text": "請選擇出題語言：", "size": "sm", "margin": "sm" }
             ]},
-            "footer": { "type": "box", "layout": "vertical", "contents": [
-                { "type": "box", "layout": "horizontal", "spacing": "sm", "contents": [
-                    { "type": "button", "style": "primary", "color": COLOR_PRIMARY, "height": "sm", "action": { "type": "postback", "label": "A", "data": f"ans=A&c={q['ans']}&id={idx}&t={category}" } },
-                    { "type": "button", "style": "primary", "color": COLOR_PRIMARY, "height": "sm", "action": { "type": "postback", "label": "B", "data": f"ans=B&c={q['ans']}&id={idx}&t={category}" } },
-                    { "type": "button", "style": "primary", "color": COLOR_PRIMARY, "height": "sm", "action": { "type": "postback", "label": "C", "data": f"ans=C&c={q['ans']}&id={idx}&t={category}" } },
-                    { "type": "button", "style": "primary", "color": COLOR_PRIMARY, "height": "sm", "action": { "type": "postback", "label": "D", "data": f"ans=D&c={q['ans']}&id={idx}&t={category}" } }
-                ]}
+            "footer": { "type": "box", "layout": "vertical", "spacing": "sm", "contents": [
+                { "type": "button", "style": "primary", "color": COLOR_PRIMARY, "action": { "type": "postback", "label": "中文答題 (Traditional Chinese)", "data": f"action=start&lang=cn&type={exam_type}" } },
+                { "type": "button", "style": "primary", "color": COLOR_SECONDARY, "action": { "type": "postback", "label": "英文答題 (English)", "data": f"action=start&lang=en&type={exam_type}" } }
+            ]}
+        }
+    }
+
+def question_flex(cat, lang, idx):
+    q = QUESTIONS[cat][idx]
+    title = q['q_cn'] if lang == 'cn' and q['q_cn'] else q['q_en']
+    opts = q['opts_cn'] if lang == 'cn' and q['opts_cn'] else q['opts_en']
+    
+    # 建構長選項全文區塊
+    opt_list = []
+    for char in ['A', 'B', 'C', 'D']:
+        if opts.get(char):
+            opt_list.append({ "type": "text", "text": f"{char}. {opts[char]}", "wrap": True, "size": "sm", "margin": "md", "color": "#666666" })
+
+    return {
+        "type": "flex", "altText": "題目來了",
+        "contents": {
+            "type": "bubble",
+            "body": { "type": "box", "layout": "vertical", "contents": [
+                { "type": "text", "text": f"AWS {cat} ({lang.upper()})", "size": "xs", "color": COLOR_PRIMARY, "weight": "bold" },
+                { "type": "text", "text": title, "wrap": True, "weight": "bold", "margin": "md", "color": COLOR_TEXT },
+                { "type": "separator", "margin": "xl" },
+                { "type": "box", "layout": "vertical", "margin": "md", "contents": opt_list }
+            ]},
+            "footer": { "type": "box", "layout": "horizontal", "spacing": "sm", "contents": [
+                { "type": "button", "style": "primary", "color": COLOR_PRIMARY, "height": "sm", "action": { "type": "postback", "label": "A", "data": f"ans=A&c={q['ans']}&id={idx}&l={lang}&t={cat}" } },
+                { "type": "button", "style": "primary", "color": COLOR_PRIMARY, "height": "sm", "action": { "type": "postback", "label": "B", "data": f"ans=B&c={q['ans']}&id={idx}&l={lang}&t={cat}" } },
+                { "type": "button", "style": "primary", "color": COLOR_PRIMARY, "height": "sm", "action": { "type": "postback", "label": "C", "data": f"ans=C&c={q['ans']}&id={idx}&l={lang}&t={cat}" } },
+                { "type": "button", "style": "primary", "color": COLOR_PRIMARY, "height": "sm", "action": { "type": "postback", "label": "D", "data": f"ans=D&c={q['ans']}&id={idx}&l={lang}&t={cat}" } }
             ]}
         }
     }
@@ -124,54 +139,47 @@ def question_flex(category, idx):
 def callback():
     events = request.json.get('events', [])
     for event in events:
-        reply_token = event['replyToken']
-        
-        # 處理追蹤或輸入文字 (叫出主選單)
+        tk = event['replyToken']
         if event['type'] == 'follow' or (event['type'] == 'message' and event['message']['type'] == 'text'):
             if load_status != "成功":
-                send_line(reply_token, [{"type": "text", "text": f"❌ 系統錯誤：{load_status}"}])
+                send_line(tk, [{"type": "text", "text": f"❌ 系統錯誤：{load_status}"}])
             else:
-                send_line(reply_token, [welcome_flex()])
+                send_line(tk, [welcome_flex()])
             
         elif event['type'] == 'postback':
             data = parse_qs(event['postback']['data'])
             
-            # 1. 抽題邏輯
-            if 'type' in data:
-                cat = data['type'][0]
-                if not QUESTIONS[cat]:
-                    send_line(reply_token, [{"type": "text", "text": f"目前 {cat} 題庫中還沒有中文題目喔！"}])
-                else:
-                    idx = random.randint(0, len(QUESTIONS[cat])-1)
-                    send_line(reply_token, [question_flex(cat, idx)])
+            # 選語言選單
+            if data.get('menu', [None])[0] == 'lang':
+                send_line(tk, [lang_select_flex(data['type'][0])])
             
-            # 2. 答題判定 + 解析 + 選擇按鈕
+            # 開始出題
+            elif data.get('action', [None])[0] == 'start':
+                lang, cat = data['lang'][0], data['type'][0]
+                # 過濾出該語言有內容的題庫
+                pool = [i for i, q in enumerate(QUESTIONS[cat]) if (q['q_cn'] if lang=='cn' else q['q_en'])]
+                if not pool:
+                    send_line(tk, [{"type": "text", "text": f"抱歉，目前 {cat} {lang.upper()} 題庫尚無內容。"}])
+                else:
+                    send_line(tk, [question_flex(cat, lang, random.choice(pool))])
+            
+            # 答題判斷
             elif 'ans' in data:
-                user_ans, correct_ans, cat, q_idx = data['ans'][0], data['c'][0], data['t'][0], int(data['id'][0])
-                explain = QUESTIONS[cat][q_idx]['exp']
+                u_ans, c_ans, q_idx, lang, cat = data['ans'][0], data['c'][0], int(data['id'][0]), data['l'][0], data['t'][0]
+                explain = QUESTIONS[cat][q_idx]['exp_cn'] if lang == 'cn' else QUESTIONS[cat][q_idx]['exp_en']
+                res = "🎉 答對了！" if u_ans == c_ans else f"❌ 答錯了，正解是 {c_ans}"
                 
-                # 判定對錯
-                title = "🎉 答對了！" if user_ans == correct_ans else f"❌ 答錯了，正解是 {correct_ans}"
-                
-                # 組合訊息：解析文字 + 下一步按鈕卡片
-                send_line(reply_token, [
-                    { "type": "text", "text": f"{title}\n\n💡 解析：\n{explain}" },
-                    {
-                        "type": "flex", "altText": "下一步",
-                        "contents": {
-                            "type": "bubble", "size": "small",
-                            "body": { "type": "box", "layout": "vertical", "spacing": "md", "contents": [
-                                { "type": "button", "style": "primary", "color": COLOR_PRIMARY, "action": { "type": "postback", "label": "挑戰下一題", "data": f"type={cat}" } },
-                                { "type": "button", "style": "secondary", "action": { "type": "postback", "label": "回主選單", "data": "main=1" } }
-                            ]}
-                        }
+                send_line(tk, [
+                    { "type": "text", "text": f"{res}\n\n💡 解析：\n{explain}" },
+                    { "type": "flex", "altText": "下一步", "contents": {
+                        "type": "bubble", "size": "small", "body": { "type": "box", "layout": "vertical", "spacing": "sm", "contents": [
+                            { "type": "button", "style": "primary", "color": COLOR_PRIMARY, "action": { "type": "postback", "label": "挑戰下一題", "data": f"action=start&lang={lang}&type={cat}" } },
+                            { "type": "button", "style": "secondary", "action": { "type": "postback", "label": "回主選單", "data": "menu=main" } }
+                        ]}}
                     }
                 ])
-                
-            # 3. 回主選單
-            elif 'main' in data:
-                send_line(reply_token, [welcome_flex()])
-                
+            elif data.get('menu', [None])[0] == 'main':
+                send_line(tk, [welcome_flex()])
     return 'OK'
 
 if __name__ == "__main__":
